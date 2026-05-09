@@ -32,8 +32,10 @@ Users upload a leaf photo through a clean web interface, and the AI returns the 
 ```
 pdisease/
 ├── manage.py
+├── requirements.txt       # Python dependencies
+├── .env.example           # Environment variables template
 ├── pdisease/              # Django project settings
-│   ├── settings.py
+│   ├── settings.py        # Dual dev/prod mode
 │   ├── urls.py
 │   └── wsgi.py
 ├── core/                  # Main Django app
@@ -73,10 +75,52 @@ venv\Scripts\activate
 ### 3. Install Dependencies
 
 ```bash
-pip install django djangorestframework tensorflow pillow numpy
+pip install -r requirements.txt
 ```
 
-### 4. Place Model Files
+> **Note:** `requirements.txt` includes: Django, djangorestframework, tensorflow, pillow, numpy, python-dotenv, gunicorn.
+
+### 4. Create .env File
+
+Copy the example environment file and fill in your values:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env`:
+
+```bash
+# Generate a NEW secret key (NEVER use the default in production)
+python -c "import secrets; print(secrets.token_urlsafe(50))"
+```
+
+Paste that output into your `.env` file:
+
+```env
+SECRET_KEY=paste-your-new-secret-key-here
+DEBUG=False
+ALLOWED_HOSTS=your-domain.com,www.your-domain.com
+```
+
+#### Environment Variables Explained
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `SECRET_KEY` | Django secret key. **Must be regenerated for production.** | `abc123...` |
+| `DEBUG` | `True` = development mode, `False` = production mode | `False` |
+| `ALLOWED_HOSTS` | Comma-separated list of allowed domains | `localhost,127.0.0.1` |
+
+#### Dual Mode Behavior
+
+| Setting | DEBUG=True (Development) | DEBUG=False (Production) |
+|---------|-------------------------|--------------------------|
+| `ALLOWED_HOSTS` | `['*']` (any host) | Uses `.env` value |
+| Static files | Served by Django dev server | Must run `collectstatic` |
+| Error pages | Detailed debug tracebacks | Generic 404/500 pages |
+| SECRET_KEY | Falls back to insecure default | **Must be set in `.env`** |
+
+### 5. Place Model Files
 
 **CRITICAL:** Manually copy these two files into `core/ml/` before starting the server:
 
@@ -92,7 +136,7 @@ Example `class_names.json` format:
 
 > **Note:** The `.h5` model file is too large for GitHub. It must be uploaded to the server separately.
 
-### 5. Run Migrations (Optional)
+### 6. Run Migrations (Optional)
 
 Only needed if you plan to use the Django admin panel:
 
@@ -100,32 +144,44 @@ Only needed if you plan to use the Django admin panel:
 python manage.py migrate
 ```
 
-### 6. Start Development Server
+### 7. Development Mode (Local Testing)
 
 ```bash
-python manage.py runserver 0.0.0.0:8000
+# Set DEBUG=True in .env
+python manage.py runserver
 ```
 
-Then open: **http://<server-ip>:8000/**
+Then open: **http://127.0.0.1:8000/**
 
-### 7. Production Deployment (Recommended for Demo)
+### 8. Production Deployment
 
-For a stable demo, use Gunicorn + Nginx:
+#### Step A: Set Production Environment
+
+Edit `.env`:
+```env
+SECRET_KEY=your-new-generated-secret-key
+DEBUG=False
+ALLOWED_HOSTS=your-domain.com,www.your-domain.com
+```
+
+#### Step B: Collect Static Files
 
 ```bash
-# Install Gunicorn
-pip install gunicorn
+python manage.py collectstatic --noinput
+```
 
-# Run with 2 workers (KVM 2 VPS optimal)
+#### Step C: Run with Gunicorn
+
+```bash
 gunicorn pdisease.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120
 ```
 
-Then configure Nginx as a reverse proxy:
+#### Step D: Configure Nginx (Reverse Proxy)
 
 ```nginx
 server {
     listen 80;
-    server_name your-domain.com;
+    server_name your-domain.com www.your-domain.com;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
@@ -136,9 +192,46 @@ server {
     }
 
     location /static/ {
-        alias /path/to/pdisease/static/;
+        alias /path/to/pdisease/staticfiles/;
     }
 }
+```
+
+#### Step E: (Optional) HTTPS with Certbot
+
+```bash
+sudo apt install certbot python3-certbot-nginx
+sudo certbot --nginx -d your-domain.com -d www.your-domain.com
+```
+
+---
+
+## Quick Reference
+
+### Generate New Secret Key
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(50))"
+```
+
+### Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### Run Development Server
+```bash
+python manage.py runserver
+```
+
+### Run Production Server
+```bash
+python manage.py collectstatic --noinput
+gunicorn pdisease.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120
+```
+
+### System Check
+```bash
+python manage.py check
 ```
 
 ---
@@ -189,12 +282,14 @@ server {
 
 | Issue | Solution |
 |-------|----------|
-| `ModuleNotFoundError: No module named 'tensorflow'` | Ensure the virtual environment is activated before running `python manage.py runserver` |
+| `ModuleNotFoundError: No module named 'tensorflow'` | Run `pip install -r requirements.txt` with venv activated |
 | `FileNotFoundError: plant_disease_model.h5` | Verify both `.h5` and `.json` files are inside `core/ml/` |
+| `DisallowedHost at /` | Add your domain to `ALLOWED_HOSTS` in `.env` |
+| `CommandError: You must set settings.ALLOWED_HOSTS` | Set `DEBUG=True` for dev, or add hosts to `.env` |
 | TensorFlow oneDNN warnings | Normal on CPU-only installs; set `TF_ENABLE_ONEDNN_OPTS=0` to suppress |
-| `System check identified no issues (0 silenced).` | This is the expected successful output of `python manage.py check` |
 | Port 8000 already in use | Kill existing process: `lsof -t -i:8000 | xargs kill -9` then restart |
 | Nginx 502 Bad Gateway | Check Gunicorn is running: `ps aux \| grep gunicorn` |
+| Static files not loading | Run `python manage.py collectstatic --noinput` |
 
 ---
 
